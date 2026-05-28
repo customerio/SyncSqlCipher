@@ -1,0 +1,22 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Xcode
+*.xcworkspace
+DerivedData/
+*.xcuserdata/
+*.xcscmblueprint
+xcuserdata/
+
+# CocoaPods (consumers manage their own)
+Pods/
+Podfile.lock
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Claude Code
+.claude/
