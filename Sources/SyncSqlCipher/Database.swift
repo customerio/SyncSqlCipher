@@ -51,14 +51,15 @@ import Foundation
 /// - QueryBuilder (`Select`, `Insert`, `Update`, `BuiltQuery`): `Database+QueryBuilder.swift`
 /// - Codable decoding: `Database+Codable.swift`
 /// - Migrations: `Database+Migrations.swift`
-public final class Database {
+public final class Database: @unchecked Sendable {
 
     // MARK: - Storage
 
     private let handle: OpaquePointer
     private let statementCache: StatementCache
     private let queue: DispatchQueue
-    private let queueKey = DispatchSpecificKey<Void>()
+    private let queueKey = DispatchSpecificKey<String>()
+    private let queueID: String
 
     // MARK: - Entity configuration
 
@@ -95,9 +96,11 @@ public final class Database {
     ) throws {
         self.complexColumnStrategy = complexColumnStrategy
 
-        let q = DispatchQueue(label: "com.syncsqlcipher.db.\(UUID().uuidString)")
+        let uuid = UUID().uuidString
+        self.queueID = uuid
+        let q = DispatchQueue(label: "io.Customer.SyncSqlCipher.\(uuid)")
         self.queue = q
-        q.setSpecific(key: queueKey, value: ())
+        q.setSpecific(key: queueKey, value: uuid)
 
         var db: OpaquePointer?
         let openRC = sqlite3_open(path, &db)
@@ -126,7 +129,8 @@ public final class Database {
 
         if walMode {
             var walStmt: OpaquePointer?
-            if sqlite3_prepare_v2(opened, "PRAGMA journal_mode=WAL", -1, &walStmt, nil) == SQLITE_OK {
+            if sqlite3_prepare_v2(opened, "PRAGMA journal_mode=WAL", -1, &walStmt, nil) == SQLITE_OK
+            {
                 sqlite3_step(walStmt)
             }
             if let s = walStmt { sqlite3_finalize(s) }
@@ -183,7 +187,7 @@ public final class Database {
     /// `withConnection` call from within a migration), `work` is executed
     /// directly to avoid a deadlock on the serial queue.
     func onQueue<T>(_ work: () throws -> T) rethrows -> T {
-        if DispatchQueue.getSpecific(key: queueKey) != nil {
+        if DispatchQueue.getSpecific(key: queueKey) == queueID {
             return try work()
         }
         return try queue.sync(execute: work)
