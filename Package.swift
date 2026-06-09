@@ -48,7 +48,10 @@ let package = Package(
         .target(
             name: "SyncSqlCipher",
             dependencies: ["CSqlCipher"],
-            path: "Sources/SyncSqlCipher"
+            path: "Sources/SyncSqlCipher",
+            swiftSettings: [
+                .enableExperimentalFeature("AccessLevelOnImport"),
+            ]
         ),
 
         // MARK: - Tests

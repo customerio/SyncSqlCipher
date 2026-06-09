@@ -1,4 +1,4 @@
-@_implementationOnly import CSqlCipher
+internal import CSqlCipher
 import Foundation
 
 // MARK: - StatementCache
