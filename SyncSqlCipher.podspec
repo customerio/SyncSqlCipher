@@ -70,9 +70,10 @@ Pod::Spec.new do |s|
     # not a separate CocoaPods target.
     'SWIFT_INCLUDE_PATHS' => '$(PODS_TARGET_SRCROOT)/Sources/CSqlCipher/include',
 
-    # `internal import CSqlCipher` requires AccessLevelOnImport, which is an
-    # experimental feature in Swift 5.10 (stable in Swift 6).
-    'OTHER_SWIFT_FLAGS' => '$(inherited) -enable-experimental-feature AccessLevelOnImport',
+    # Enables library evolution mode, which makes `internal import` safe and
+    # warning-free. The generated .swiftinterface is unused for source-distributed
+    # pods but the flag also enforces ABI stability rules at compile time.
+    'BUILD_LIBRARY_FOR_DISTRIBUTION' => 'YES',
 
     # Suppress warnings from the upstream SQLite C amalgamation (sqlite3.c).
     'OTHER_CFLAGS' => '$(inherited) -w',
