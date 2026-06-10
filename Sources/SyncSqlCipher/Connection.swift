@@ -185,9 +185,11 @@ public final class Connection {
     /// - Parameters:
     ///   - sql:      The SQL text, optionally containing `?` placeholders.
     ///   - bindings: Values to bind to each `?` in order.
-    public func execute(_ sql: String, _ bindings: any SQLConvertible...) throws {
+    /// - Returns: The number of rows affected by the statement.
+    @discardableResult
+    public func execute(_ sql: String, _ bindings: any SQLConvertible...) throws -> Int {
         guard !isExpired else { throw SqlCipherError.connectionExpired }
-        try _execute(sql, bindings: bindings)
+        return try execute(sql, bindings: bindings)
     }
 
     // MARK: - Query (read)
@@ -201,7 +203,7 @@ public final class Connection {
     ///            rows matched).
     public func query(_ sql: String, _ bindings: any SQLConvertible...) throws -> [Row] {
         guard !isExpired else { throw SqlCipherError.connectionExpired }
-        return try _query(sql, bindings: bindings)
+        return try query(sql, bindings: bindings)
     }
 
     // MARK: - Scalar query
@@ -221,12 +223,23 @@ public final class Connection {
         as type: T.Type = T.self
     ) throws -> T? {
         guard !isExpired else { throw SqlCipherError.connectionExpired }
-        return try _scalarQuery(sql, bindings: bindings, as: T.self)
+        return try scalarQuery(sql, bindings: bindings, as: T.self)
     }
 
-    // MARK: - Internal array-based entries (used by Database for forwarding)
+    // MARK: - Array-binding overloads
 
-    func _execute(_ sql: String, bindings: [any SQLConvertible]) throws {
+    /// Executes an SQL statement using a pre-collected bindings array.
+    ///
+    /// Identical to ``execute(_:_:...)`` but accepts `[any SQLConvertible]`
+    /// instead of a variadic list — used internally where bindings are already
+    /// collected into an array.
+    ///
+    /// - Parameters:
+    ///   - sql:      The SQL text, optionally containing `?` placeholders.
+    ///   - bindings: Values to bind to each `?` in order.
+    /// - Returns: The number of rows affected by the statement.
+    @discardableResult
+    func execute(_ sql: String, bindings: [any SQLConvertible]) throws -> Int {
         let stmt = try StatementHandle.prepare(sql: sql, db: db, cache: cache)
         defer { stmt.done() }
         try bind(stmt.pointer, bindings)
@@ -237,16 +250,37 @@ public final class Connection {
         guard rc == SQLITE_DONE || rc == SQLITE_ROW else {
             throw SqlCipherError.stepFailed(message: String(cString: sqlite3_errmsg(db)))
         }
+        return Int(sqlite3_changes(db))
     }
 
-    func _query(_ sql: String, bindings: [any SQLConvertible]) throws -> [Row] {
+    /// Executes a SELECT using a pre-collected bindings array, returning all rows.
+    ///
+    /// Identical to ``query(_:_:...)`` but accepts `[any SQLConvertible]`
+    /// instead of a variadic list — used internally where bindings are already
+    /// collected into an array.
+    ///
+    /// - Parameters:
+    ///   - sql:      The SQL text, optionally containing `?` placeholders.
+    ///   - bindings: Values to bind to each `?` in order.
+    /// - Returns: An array containing one ``Row`` per result row (empty if no rows matched).
+    func query(_ sql: String, bindings: [any SQLConvertible]) throws -> [Row] {
         let stmt = try StatementHandle.prepare(sql: sql, db: db, cache: cache)
         defer { stmt.done() }
         try bind(stmt.pointer, bindings)
         return try collectRows(stmt.pointer, sql: sql)
     }
 
-    func _scalarQuery<T: SQLConvertible>(
+    /// Executes a scalar SELECT using a pre-collected bindings array.
+    ///
+    /// Identical to ``scalarQuery(_:_:...:as:)`` but accepts `[any SQLConvertible]`
+    /// instead of a variadic list — used internally where bindings are already
+    /// collected into an array.
+    ///
+    /// - Parameters:
+    ///   - sql:      A SELECT that returns at least one column.
+    ///   - bindings: Values to bind to each `?` in order.
+    ///   - type:     The Swift type to decode the first column into.
+    func scalarQuery<T: SQLConvertible>(
         _ sql: String,
         bindings: [any SQLConvertible],
         as type: T.Type = T.self
@@ -271,31 +305,11 @@ extension Connection {
     // MARK: Execute
 
     /// Executes a pre-built query that produces no result rows.
-    public func execute(_ query: BuiltQuery) throws {
+    ///
+    /// - Returns: The number of rows affected by the statement.
+    @discardableResult
+    public func execute(_ query: BuiltQuery) throws -> Int {
         guard !isExpired else { throw SqlCipherError.connectionExpired }
-        try _execute(query)
-    }
-
-    // MARK: Query
-
-    /// Executes a pre-built query and returns all matching rows.
-    public func query(_ query: BuiltQuery) throws -> [Row] {
-        guard !isExpired else { throw SqlCipherError.connectionExpired }
-        return try _query(query)
-    }
-
-    // MARK: Scalar
-
-    /// Executes a pre-built query and returns the first column of the first row.
-    public func scalarQuery<T: SQLConvertible>(_ query: BuiltQuery, as type: T.Type = T.self) throws
-        -> T? {
-        guard !isExpired else { throw SqlCipherError.connectionExpired }
-        return try _scalarQuery(query, as: T.self)
-    }
-
-    // MARK: Internal array-based BuiltQuery entries
-
-    func _execute(_ query: BuiltQuery) throws {
         let stmt = try StatementHandle.prepare(sql: query.sql, db: db, cache: cache)
         defer { stmt.done() }
         try bindNamed(stmt.pointer, query.bindings)
@@ -304,16 +318,26 @@ extension Connection {
         guard rc == SQLITE_DONE || rc == SQLITE_ROW else {
             throw SqlCipherError.stepFailed(message: String(cString: sqlite3_errmsg(db)))
         }
+        return Int(sqlite3_changes(db))
     }
 
-    func _query(_ query: BuiltQuery) throws -> [Row] {
+    // MARK: Query
+
+    /// Executes a pre-built query and returns all matching rows.
+    public func query(_ query: BuiltQuery) throws -> [Row] {
+        guard !isExpired else { throw SqlCipherError.connectionExpired }
         let stmt = try StatementHandle.prepare(sql: query.sql, db: db, cache: cache)
         defer { stmt.done() }
         try bindNamed(stmt.pointer, query.bindings)
         return try collectRows(stmt.pointer, sql: query.sql)
     }
 
-    func _scalarQuery<T: SQLConvertible>(_ query: BuiltQuery, as type: T.Type = T.self) throws -> T? {
+    // MARK: Scalar
+
+    /// Executes a pre-built query and returns the first column of the first row.
+    public func scalarQuery<T: SQLConvertible>(_ query: BuiltQuery, as type: T.Type = T.self) throws
+        -> T? {
+        guard !isExpired else { throw SqlCipherError.connectionExpired }
         let stmt = try StatementHandle.prepare(sql: query.sql, db: db, cache: cache)
         defer { stmt.done() }
         try bindNamed(stmt.pointer, query.bindings)
@@ -334,17 +358,23 @@ extension Connection {
     // MARK: Insert
 
     /// Builds and executes an ``Insert`` statement with variadic ``ParamBinding`` values.
-    public func execute(_ insert: Insert, _ params: ParamBinding...) throws {
+    ///
+    /// - Returns: The number of rows affected by the statement.
+    @discardableResult
+    public func execute(_ insert: Insert, _ params: ParamBinding...) throws -> Int {
         guard !isExpired else { throw SqlCipherError.connectionExpired }
-        try _execute(insert.build(params: params))
+        return try execute(insert.build(params: params))
     }
 
     // MARK: Update
 
     /// Builds and executes an ``Update`` statement with variadic ``ParamBinding`` values.
-    public func execute(_ update: Update, _ params: ParamBinding...) throws {
+    ///
+    /// - Returns: The number of rows affected by the statement.
+    @discardableResult
+    public func execute(_ update: Update, _ params: ParamBinding...) throws -> Int {
         guard !isExpired else { throw SqlCipherError.connectionExpired }
-        try _execute(update.build(params: params))
+        return try execute(update.build(params: params))
     }
 }
 

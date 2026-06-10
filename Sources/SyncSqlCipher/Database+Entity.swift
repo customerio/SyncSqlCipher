@@ -59,7 +59,7 @@ extension Database {
             }
             try execute("COMMIT")
         } catch {
-            try? execute("ROLLBACK")
+            _ = try? execute("ROLLBACK")
             throw error
         }
         return results
@@ -78,7 +78,7 @@ extension Database {
         var decoder = RowDecoder()
         decoder.complexColumnStrategy = complexColumnStrategy
         let q = Select(.all).from(T.tableName).build()
-        let rows = try withConnection { try $0._query(q) }
+        let rows = try withConnection { try $0.query(q) }
         return try decoder.decode(T.self, from: rows)
     }
 
@@ -110,7 +110,7 @@ extension Database {
         var decoder = RowDecoder()
         decoder.complexColumnStrategy = complexColumnStrategy
         let q = Select(.all).from(T.tableName).where(predicate).build(params: params)
-        let rows = try withConnection { try $0._query(q) }
+        let rows = try withConnection { try $0.query(q) }
         return try decoder.decode(T.self, from: rows)
     }
 
@@ -130,9 +130,91 @@ extension Database {
         decoder.complexColumnStrategy = complexColumnStrategy
         let predicate = Expression.compare(ColumnRef(T.primaryKeyName), .eq, .literal(id))
         let q = Select(.all).from(T.tableName).where(predicate).limit(1).build()
-        let rows = try withConnection { try $0._query(q) }
+        let rows = try withConnection { try $0.query(q) }
         let decoded = try decoder.decode(T.self, from: rows)
         return decoded.first
+    }
+
+    // MARK: - Delete
+
+    /// Deletes the row whose primary key equals `id` from `T`'s table.
+    ///
+    /// ```swift
+    /// let removed = try db.delete(from: Widget.self, id: 42)
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - type: The `Entity` type to delete from.  Can be inferred from context.
+    ///   - id:   The primary key value of the row to remove.
+    /// - Returns: `true` if a row was deleted, `false` if no row matched.
+    @discardableResult
+    public func delete<T: Entity>(from type: T.Type = T.self, id: T.ID) throws -> Bool {
+        let sql = "DELETE FROM \"\(T.tableName.name)\" WHERE \"\(T.primaryKeyName)\" = ?"
+        return try withConnection { conn in
+            try conn.execute(sql, bindings: [id as any SQLConvertible]) > 0
+        }
+    }
+
+    /// Deletes all rows whose primary key is in `ids` from `T`'s table.
+    ///
+    /// ```swift
+    /// let count = try db.delete(from: Widget.self, ids: [1, 2, 3])
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - type: The `Entity` type to delete from.  Can be inferred from context.
+    ///   - ids:  The primary key values to remove.
+    /// - Returns: The number of rows actually deleted.
+    @discardableResult
+    public func delete<T: Entity>(from type: T.Type = T.self, ids: [T.ID]) throws -> Int {
+        guard !ids.isEmpty else { return 0 }
+        let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ", ")
+        let sql =
+            "DELETE FROM \"\(T.tableName.name)\" WHERE \"\(T.primaryKeyName)\" IN (\(placeholders))"
+        let bindings = ids.map { $0 as any SQLConvertible }
+        return try withConnection { conn in
+            try conn.execute(sql, bindings: bindings)
+        }
+    }
+
+    /// Deletes the row corresponding to `record` from its table.
+    ///
+    /// Returns `false` without touching the database if `record`'s primary key
+    /// is `nil` (i.e. the record was never persisted).
+    ///
+    /// ```swift
+    /// let removed = try db.delete(widget)
+    /// ```
+    ///
+    /// - Parameter record: The entity whose row should be removed.
+    /// - Returns: `true` if a row was deleted, `false` if no row matched or the record was unpersisted.
+    @discardableResult
+    public func delete<T: Entity>(_ record: T) throws -> Bool {
+        let id: T.ID = record[keyPath: T.primaryKey]
+        guard id.sqlValue != .null else {
+            return false
+        }
+        return try delete(from: T.self, id: id)
+    }
+
+    /// Deletes all rows corresponding to `records` from their table.
+    ///
+    /// Records with a `nil` primary key are skipped.  All deletes are issued
+    /// in a single `IN` statement.
+    ///
+    /// ```swift
+    /// let count = try db.delete([alice, bob, carol])
+    /// ```
+    ///
+    /// - Parameter records: The entities whose rows should be removed.
+    /// - Returns: The number of rows actually deleted.
+    @discardableResult
+    public func delete<T: Entity>(_ records: [T]) throws -> Int {
+        let ids: [T.ID] = records.compactMap { record -> T.ID? in
+            let id: T.ID = record[keyPath: T.primaryKey]
+            return id.sqlValue == .null ? nil : id
+        }
+        return try delete(from: T.self, ids: ids)
     }
 
     // MARK: - Private core
@@ -169,11 +251,11 @@ extension Database {
         let sql = "INSERT INTO \"\(T.tableName.name)\" (\(colList)) VALUES (\(placeholders))"
         let bindings = insertCols.map { $0.value as any SQLConvertible }
 
-        try withConnection { try $0._execute(sql, bindings: bindings) }
+        try withConnection { try $0.execute(sql, bindings: bindings) }
 
         var copy = record
         let rowid: Int64? = try withConnection {
-            try $0._scalarQuery("SELECT last_insert_rowid()", bindings: [], as: Int64.self)
+            try $0.scalarQuery("SELECT last_insert_rowid()", bindings: [], as: Int64.self)
         }
         if let rowid, let assigned = T.ID.from(sqlValue: .integer(rowid)) {
             copy[keyPath: T.primaryKey] = assigned
@@ -211,7 +293,7 @@ extension Database {
                 """
         }
 
-        try withConnection { try $0._execute(sql, bindings: bindings) }
+        try withConnection { try $0.execute(sql, bindings: bindings) }
         return record  // PK was already set; copy is identical to input
     }
 }

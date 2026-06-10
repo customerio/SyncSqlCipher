@@ -33,7 +33,7 @@ extension Database {
         as type: T.Type = T.self,
         decoder: RowDecoder = RowDecoder()
     ) throws -> [T] {
-        let rows = try withConnection { try $0._query(sql, bindings: bindings) }
+        let rows = try withConnection { try $0.query(sql, bindings: bindings) }
         return try decoder.decode(T.self, from: rows)
     }
 
@@ -50,7 +50,7 @@ extension Database {
         as type: T.Type = T.self,
         decoder: RowDecoder = RowDecoder()
     ) throws -> [T] {
-        let rows = try withConnection { try $0._query(query) }
+        let rows = try withConnection { try $0.query(query) }
         return try decoder.decode(T.self, from: rows)
     }
 
@@ -70,7 +70,7 @@ extension Database {
         decoder: RowDecoder = RowDecoder()
     ) throws -> [T] {
         let q = select.build(params: params)
-        let rows = try withConnection { try $0._query(q) }
+        let rows = try withConnection { try $0.query(q) }
         return try decoder.decode(T.self, from: rows)
     }
 
@@ -90,7 +90,7 @@ extension Database {
         decoder: RowDecoder = RowDecoder()
     ) throws -> [T] {
         let q = select.build(params: params.map { ParamBinding(name: $0.key, value: $0.value) })
-        let rows = try withConnection { try $0._query(q) }
+        let rows = try withConnection { try $0.query(q) }
         return try decoder.decode(T.self, from: rows)
     }
 }

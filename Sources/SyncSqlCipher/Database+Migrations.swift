@@ -43,17 +43,17 @@ extension Database {
         // 3. Apply each pending migration inside its own transaction.
         for migration in migrations where !applied.contains(migration.id) {
             try withConnection { conn in
-                try conn._execute("BEGIN", bindings: [])
+                try conn.execute("BEGIN", bindings: [])
                 let ctx = MigrationContext(db: conn.db, cache: conn.cache)
                 do {
                     try migration.up(ctx)
-                    try conn._execute(
+                    try conn.execute(
                         "INSERT INTO _migrations (id) VALUES (?)",
                         bindings: [migration.id]
                     )
-                    try conn._execute("COMMIT", bindings: [])
+                    try conn.execute("COMMIT", bindings: [])
                 } catch {
-                    try? conn._execute("ROLLBACK", bindings: [])
+                    _ = try? conn.execute("ROLLBACK", bindings: [])
                     throw error
                 }
             }
@@ -118,17 +118,17 @@ extension Database {
                 continue
             }
             try withConnection { conn in
-                try conn._execute("BEGIN", bindings: [])
+                try conn.execute("BEGIN", bindings: [])
                 let ctx = MigrationContext(db: conn.db, cache: conn.cache)
                 do {
                     try migration.down(ctx)
-                    try conn._execute(
+                    try conn.execute(
                         "DELETE FROM _migrations WHERE id = ?",
                         bindings: [migration.id]
                     )
-                    try conn._execute("COMMIT", bindings: [])
+                    try conn.execute("COMMIT", bindings: [])
                 } catch {
-                    try? conn._execute("ROLLBACK", bindings: [])
+                    _ = try? conn.execute("ROLLBACK", bindings: [])
                     throw error
                 }
             }

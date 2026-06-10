@@ -33,54 +33,68 @@ public final class MigrationContext {
     // MARK: - Execute: raw SQL
 
     /// Executes a raw SQL statement (no result rows expected).
-    public func execute(_ sql: String, _ bindings: any SQLConvertible...) throws {
-        try withConn { try $0._execute(sql, bindings: bindings) }
+    ///
+    /// - Returns: The number of rows affected by the statement.
+    @discardableResult
+    public func execute(_ sql: String, _ bindings: any SQLConvertible...) throws -> Int {
+        try withConn { try $0.execute(sql, bindings: bindings) }
     }
 
     // MARK: - Execute: DDL builders
 
     /// Creates a table using a ``CreateTable`` builder.
-    public func execute(_ create: CreateTable) throws {
-        try withConn { try $0._execute(create.build()) }
+    @discardableResult
+    public func execute(_ create: CreateTable) throws -> Int {
+        try withConn { try $0.execute(create.build()) }
     }
 
     /// Alters a table using an ``AlterTable`` builder.
-    public func execute(_ alter: AlterTable) throws {
-        try withConn { try $0._execute(alter.build()) }
+    @discardableResult
+    public func execute(_ alter: AlterTable) throws -> Int {
+        try withConn { try $0.execute(alter.build()) }
     }
 
     /// Drops a table using a ``DropTable`` builder.
-    public func execute(_ drop: DropTable) throws {
-        try withConn { try $0._execute(drop.build()) }
+    @discardableResult
+    public func execute(_ drop: DropTable) throws -> Int {
+        try withConn { try $0.execute(drop.build()) }
     }
 
     /// Creates an index using a ``CreateIndex`` builder.
-    public func execute(_ create: CreateIndex) throws {
-        try withConn { try $0._execute(create.build()) }
+    @discardableResult
+    public func execute(_ create: CreateIndex) throws -> Int {
+        try withConn { try $0.execute(create.build()) }
     }
 
     /// Drops an index using a ``DropIndex`` builder.
-    public func execute(_ drop: DropIndex) throws {
-        try withConn { try $0._execute(drop.build()) }
+    @discardableResult
+    public func execute(_ drop: DropIndex) throws -> Int {
+        try withConn { try $0.execute(drop.build()) }
     }
 
     // MARK: - Execute: DML builders
 
     /// Inserts a row using an ``Insert`` builder.
-    public func execute(_ insert: Insert, _ params: ParamBinding...) throws {
-        try withConn { try $0._execute(insert.build(params: params)) }
+    ///
+    /// - Returns: The number of rows affected by the statement.
+    @discardableResult
+    public func execute(_ insert: Insert, _ params: ParamBinding...) throws -> Int {
+        try withConn { try $0.execute(insert.build(params: params)) }
     }
 
     /// Updates rows using an ``Update`` builder.
-    public func execute(_ update: Update, _ params: ParamBinding...) throws {
-        try withConn { try $0._execute(update.build(params: params)) }
+    ///
+    /// - Returns: The number of rows affected by the statement.
+    @discardableResult
+    public func execute(_ update: Update, _ params: ParamBinding...) throws -> Int {
+        try withConn { try $0.execute(update.build(params: params)) }
     }
 
     // MARK: - Query helpers (useful for data migrations)
 
     /// Executes a raw SQL SELECT and returns all matching rows.
     public func query(_ sql: String, _ bindings: any SQLConvertible...) throws -> [Row] {
-        try withConn { try $0._query(sql, bindings: bindings) }
+        try withConn { try $0.query(sql, bindings: bindings) }
     }
 }
 

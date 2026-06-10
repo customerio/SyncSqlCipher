@@ -14,8 +14,10 @@ extension Database {
     /// - Parameters:
     ///   - sql:      The SQL text, optionally containing `?` placeholders.
     ///   - bindings: Values to bind to each `?` in order.
-    public func execute(_ sql: String, _ bindings: any SQLConvertible...) throws {
-        try withConnection { try $0._execute(sql, bindings: bindings) }
+    /// - Returns: The number of rows affected by the statement.
+    @discardableResult
+    public func execute(_ sql: String, _ bindings: any SQLConvertible...) throws -> Int {
+        try withConnection { try $0.execute(sql, bindings: bindings) }
     }
 
     // MARK: query
@@ -27,7 +29,7 @@ extension Database {
     ///   - bindings: Values to bind to each `?` in order.
     /// - Returns: An array containing one ``Row`` per result row.
     public func query(_ sql: String, _ bindings: any SQLConvertible...) throws -> [Row] {
-        try withConnection { try $0._query(sql, bindings: bindings) }
+        try withConnection { try $0.query(sql, bindings: bindings) }
     }
 
     // MARK: scalarQuery
@@ -49,6 +51,6 @@ extension Database {
         _ bindings: any SQLConvertible...,
         as type: T.Type = T.self
     ) throws -> T? {
-        try withConnection { try $0._scalarQuery(sql, bindings: bindings, as: T.self) }
+        try withConnection { try $0.scalarQuery(sql, bindings: bindings, as: T.self) }
     }
 }
