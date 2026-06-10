@@ -4,6 +4,8 @@ import Foundation
 
 extension Database {
 
+    // MARK: - Save
+
     /// Saves a single `Entity` to the database and returns the (possibly updated) record.
     ///
     /// The exact SQL depends on the primary key value at the time of the call:
@@ -31,7 +33,7 @@ extension Database {
     /// - Throws: ``EntityError`` or ``SqlCipherError``.
     @discardableResult
     public func save<T: Entity>(_ record: T) throws -> T {
-        try _save(record)
+        try withConnection { try $0.save(record, complexColumnStrategy: complexColumnStrategy) }
     }
 
     /// Saves an array of `Entity` values inside a single transaction.
@@ -41,7 +43,7 @@ extension Database {
     /// auto-increment primary keys filled in where applicable.
     ///
     /// ```swift
-    /// let saved = try await db.save([alice, bob, carol])
+    /// let saved = try db.save([alice, bob, carol])
     /// ```
     ///
     /// - Parameter records: The records to save.
@@ -49,20 +51,7 @@ extension Database {
     /// - Throws: ``EntityError`` or ``SqlCipherError``.
     @discardableResult
     public func save<T: Entity>(_ records: [T]) throws -> [T] {
-        guard !records.isEmpty else { return [] }
-        try execute("BEGIN")
-        var results: [T] = []
-        results.reserveCapacity(records.count)
-        do {
-            for record in records {
-                results.append(try _save(record))
-            }
-            try execute("COMMIT")
-        } catch {
-            _ = try? execute("ROLLBACK")
-            throw error
-        }
-        return results
+        try withConnection { try $0.save(records, complexColumnStrategy: complexColumnStrategy) }
     }
 
     // MARK: - Fetch
@@ -70,16 +59,12 @@ extension Database {
     /// Fetches all rows from `T`'s table, decoded as `[T]`.
     ///
     /// ```swift
-    /// let allWidgets = try await db.fetch(Widget.self)
+    /// let allWidgets = try db.fetch(Widget.self)
     /// ```
     ///
     /// - Parameter type: The `Entity` type to fetch.  Can be inferred from context.
     public func fetch<T: Entity>(_ type: T.Type = T.self) throws -> [T] {
-        var decoder = RowDecoder()
-        decoder.complexColumnStrategy = complexColumnStrategy
-        let q = Select(.all).from(T.tableName).build()
-        let rows = try withConnection { try $0.query(q) }
-        return try decoder.decode(T.self, from: rows)
+        try withConnection { try $0.fetch(T.self, complexColumnStrategy: complexColumnStrategy) }
     }
 
     /// Fetches rows matching `predicate` from `T`'s table.
@@ -90,12 +75,12 @@ extension Database {
     ///
     /// ```swift
     /// // Literal values
-    /// let cheap = try await db.fetch(Widget.self, where: col("price") < 5.0)
+    /// let cheap = try db.fetch(Widget.self, where: col("price") < 5.0)
     ///
     /// // Named param — same SQL template, different values
     /// let minPrice = Param<Double>("minPrice")
     /// let template = col("price") >= minPrice
-    /// let expensive = try await db.fetch(Widget.self, where: template, minPrice.set(100.0))
+    /// let expensive = try db.fetch(Widget.self, where: template, minPrice.set(100.0))
     /// ```
     ///
     /// - Parameters:
@@ -107,17 +92,20 @@ extension Database {
         where predicate: Expression,
         _ params: ParamBinding...
     ) throws -> [T] {
-        var decoder = RowDecoder()
-        decoder.complexColumnStrategy = complexColumnStrategy
-        let q = Select(.all).from(T.tableName).where(predicate).build(params: params)
-        let rows = try withConnection { try $0.query(q) }
-        return try decoder.decode(T.self, from: rows)
+        try withConnection {
+            try $0.fetch(
+                T.self,
+                where: predicate,
+                params: params,
+                complexColumnStrategy: complexColumnStrategy
+            )
+        }
     }
 
     /// Fetches the single row whose primary key equals `id`, or `nil` if absent.
     ///
     /// ```swift
-    /// if let widget = try await db.fetchOne(Widget.self, id: 42) {
+    /// if let widget = try db.fetchOne(Widget.self, id: 42) {
     ///     print(widget.name)
     /// }
     /// ```
@@ -126,13 +114,9 @@ extension Database {
     ///   - type: The `Entity` type to fetch.  Can be inferred from context.
     ///   - id:   The primary key value to look up.
     public func fetchOne<T: Entity>(_ type: T.Type = T.self, id: T.ID) throws -> T? {
-        var decoder = RowDecoder()
-        decoder.complexColumnStrategy = complexColumnStrategy
-        let predicate = Expression.compare(ColumnRef(T.primaryKeyName), .eq, .literal(id))
-        let q = Select(.all).from(T.tableName).where(predicate).limit(1).build()
-        let rows = try withConnection { try $0.query(q) }
-        let decoded = try decoder.decode(T.self, from: rows)
-        return decoded.first
+        try withConnection {
+            try $0.fetchOne(T.self, id: id, complexColumnStrategy: complexColumnStrategy)
+        }
     }
 
     // MARK: - Delete
@@ -149,10 +133,7 @@ extension Database {
     /// - Returns: `true` if a row was deleted, `false` if no row matched.
     @discardableResult
     public func delete<T: Entity>(from type: T.Type = T.self, id: T.ID) throws -> Bool {
-        let sql = "DELETE FROM \"\(T.tableName.name)\" WHERE \"\(T.primaryKeyName)\" = ?"
-        return try withConnection { conn in
-            try conn.execute(sql, bindings: [id as any SQLConvertible]) > 0
-        }
+        try withConnection { try $0.delete(from: T.self, id: id) }
     }
 
     /// Deletes all rows whose primary key is in `ids` from `T`'s table.
@@ -167,14 +148,7 @@ extension Database {
     /// - Returns: The number of rows actually deleted.
     @discardableResult
     public func delete<T: Entity>(from type: T.Type = T.self, ids: [T.ID]) throws -> Int {
-        guard !ids.isEmpty else { return 0 }
-        let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ", ")
-        let sql =
-            "DELETE FROM \"\(T.tableName.name)\" WHERE \"\(T.primaryKeyName)\" IN (\(placeholders))"
-        let bindings = ids.map { $0 as any SQLConvertible }
-        return try withConnection { conn in
-            try conn.execute(sql, bindings: bindings)
-        }
+        try withConnection { try $0.delete(from: T.self, ids: ids) }
     }
 
     /// Deletes the row corresponding to `record` from its table.
@@ -190,11 +164,7 @@ extension Database {
     /// - Returns: `true` if a row was deleted, `false` if no row matched or the record was unpersisted.
     @discardableResult
     public func delete<T: Entity>(_ record: T) throws -> Bool {
-        let id: T.ID = record[keyPath: T.primaryKey]
-        guard id.sqlValue != .null else {
-            return false
-        }
-        return try delete(from: T.self, id: id)
+        try withConnection { try $0.delete(record) }
     }
 
     /// Deletes all rows corresponding to `records` from their table.
@@ -210,90 +180,6 @@ extension Database {
     /// - Returns: The number of rows actually deleted.
     @discardableResult
     public func delete<T: Entity>(_ records: [T]) throws -> Int {
-        let ids: [T.ID] = records.compactMap { record -> T.ID? in
-            let id: T.ID = record[keyPath: T.primaryKey]
-            return id.sqlValue == .null ? nil : id
-        }
-        return try delete(from: T.self, ids: ids)
-    }
-
-    // MARK: - Private core
-
-    private func _save<T: Entity>(_ record: T) throws -> T {
-        let encoder = RowEncoder()
-        encoder.complexColumnStrategy = complexColumnStrategy
-        let columns = try encoder.encode(record)
-
-        guard !columns.isEmpty else { throw EntityError.noColumnsToInsert }
-
-        let pkName = T.primaryKeyName
-        let pkValue = record[keyPath: T.primaryKey].sqlValue
-
-        switch pkValue {
-        case .null:
-            return try _insertAutoIncrement(record, columns: columns, pkName: pkName)
-        default:
-            return try _upsert(record, columns: columns, pkName: pkName)
-        }
-    }
-
-    /// INSERT without the PK column; write the assigned rowid back to the copy.
-    private func _insertAutoIncrement<T: Entity>(
-        _ record: T,
-        columns: [(key: String, value: Value)],
-        pkName: String
-    ) throws -> T {
-        let insertCols = columns.filter { $0.key != pkName }
-        guard !insertCols.isEmpty else { throw EntityError.noColumnsToInsert }
-
-        let colList = insertCols.map { "\"\($0.key)\"" }.joined(separator: ", ")
-        let placeholders = Array(repeating: "?", count: insertCols.count).joined(separator: ", ")
-        let sql = "INSERT INTO \"\(T.tableName.name)\" (\(colList)) VALUES (\(placeholders))"
-        let bindings = insertCols.map { $0.value as any SQLConvertible }
-
-        try withConnection { try $0.execute(sql, bindings: bindings) }
-
-        var copy = record
-        let rowid: Int64? = try withConnection {
-            try $0.scalarQuery("SELECT last_insert_rowid()", bindings: [], as: Int64.self)
-        }
-        if let rowid, let assigned = T.ID.from(sqlValue: .integer(rowid)) {
-            copy[keyPath: T.primaryKey] = assigned
-        }
-        return copy
-    }
-
-    /// INSERT … ON CONFLICT(pk) DO UPDATE SET …  (true upsert).
-    private func _upsert<T: Entity>(
-        _ record: T,
-        columns: [(key: String, value: Value)],
-        pkName: String
-    ) throws -> T {
-        let updateCols = columns.filter { $0.key != pkName }
-
-        let colList = columns.map { "\"\($0.key)\"" }.joined(separator: ", ")
-        let placeholders = Array(repeating: "?", count: columns.count).joined(separator: ", ")
-        let bindings = columns.map { $0.value as any SQLConvertible }
-
-        let sql: String
-        if updateCols.isEmpty {
-            // Only a PK column — treat as idempotent insert.
-            sql =
-                "INSERT OR IGNORE INTO \"\(T.tableName.name)\" (\(colList)) VALUES (\(placeholders))"
-        } else {
-            let setClause =
-                updateCols
-                .map { "\"\($0.key)\" = excluded.\"\($0.key)\"" }
-                .joined(separator: ",\n    ")
-            sql = """
-                INSERT INTO "\(T.tableName.name)" (\(colList))
-                VALUES (\(placeholders))
-                ON CONFLICT("\(pkName)") DO UPDATE SET
-                    \(setClause)
-                """
-        }
-
-        try withConnection { try $0.execute(sql, bindings: bindings) }
-        return record  // PK was already set; copy is identical to input
+        try withConnection { try $0.delete(records) }
     }
 }
