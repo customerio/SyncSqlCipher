@@ -27,12 +27,21 @@
 /// try await db.execute(
 ///     Insert(into: users).set(name, to: "Carol").set(email, to: "carol@example.com")
 /// )
+///
+/// // Upsert — insert or update on conflict:
+/// let upsert = Insert(into: users)
+///     .set(id,    to: idParam)
+///     .set(name,  to: nameParam)
+///     .set(email, to: emailParam)
+///     .onConflict(id, doUpdate: name, email)
+///
+/// try db.execute(upsert, idParam.set(1), nameParam.set("Alice"), emailParam.set("alice@example.com"))
 /// ```
 public struct Insert: Sendable {
 
     // MARK: - Conflict resolution
 
-    /// The `ON CONFLICT` algorithm for this insert.
+    /// The `INSERT OR <resolution>` algorithm applied before any row is inserted.
     public enum ConflictResolution: String, Sendable {
         case rollback = "OR ROLLBACK"
         case abort    = "OR ABORT"
@@ -43,16 +52,23 @@ public struct Insert: Sendable {
 
     // MARK: - Storage
 
+    private struct UpsertClause: Sendable {
+        let conflictColumn: ColumnRef
+        let updateColumns: [ColumnRef]
+    }
+
     private let table: TableName
     private var assignments: [(column: ColumnRef, value: SQLValue)]
-    private let onConflict: ConflictResolution?
+    private let conflictResolution: ConflictResolution?
+    private var upsertClause: UpsertClause?
 
     // MARK: - Initialiser
 
     public init(into table: TableName, onConflict: ConflictResolution? = nil) {
         self.table = table
         self.assignments = []
-        self.onConflict = onConflict
+        self.conflictResolution = onConflict
+        self.upsertClause = nil
     }
 
     // MARK: - Fluent setters
@@ -74,6 +90,35 @@ public struct Insert: Sendable {
         return next
     }
 
+    // MARK: - Upsert clause
+
+    /// Appends an `ON CONFLICT(column) DO UPDATE SET` clause.
+    ///
+    /// When a row conflicts on `column`, each column in `updateColumns` is
+    /// updated in-place to the value that was attempted
+    /// (`excluded.<colName>`).  Rows that don't conflict are inserted
+    /// normally.
+    ///
+    /// ```swift
+    /// let upsert = Insert(into: users)
+    ///     .set(col("id"),    to: idParam)
+    ///     .set(col("name"),  to: nameParam)
+    ///     .set(col("email"), to: emailParam)
+    ///     .onConflict(col("id"), doUpdate: col("name"), col("email"))
+    ///
+    /// try db.execute(upsert, idParam.set(1), nameParam.set("Alice"), emailParam.set("a@b.com"))
+    /// ```
+    public func onConflict(_ column: ColumnRef, doUpdate updateColumns: ColumnRef...) -> Insert {
+        onConflict(column, doUpdate: updateColumns)
+    }
+
+    /// Array-based overload — used when the update columns are already collected.
+    public func onConflict(_ column: ColumnRef, doUpdate updateColumns: [ColumnRef]) -> Insert {
+        var next = self
+        next.upsertClause = UpsertClause(conflictColumn: column, updateColumns: updateColumns)
+        return next
+    }
+
     // MARK: - Build
 
     /// Builds the statement, merging any caller-supplied ``ParamBinding`` values.
@@ -86,8 +131,22 @@ public struct Insert: Sendable {
         var ctx = RenderContext()
         let cols = assignments.map { $0.column.name }.joined(separator: ", ")
         let vals = assignments.map { ctx.render($0.value) }.joined(separator: ", ")
-        let conflict = onConflict.map { " \($0.rawValue)" } ?? ""
-        let sql = "INSERT\(conflict) INTO \(table.name) (\(cols)) VALUES (\(vals))"
+
+        let sql: String
+        if let upsert = upsertClause {
+            let setClause = upsert.updateColumns
+                .map { "\($0.name) = excluded.\($0.name)" }
+                .joined(separator: ", ")
+            sql = [
+                "INSERT INTO \(table.name) (\(cols))",
+                "VALUES (\(vals))",
+                "ON CONFLICT(\(upsert.conflictColumn.name)) DO UPDATE SET \(setClause)",
+            ].joined(separator: "\n")
+        } else {
+            let conflict = conflictResolution.map { " \($0.rawValue)" } ?? ""
+            sql = "INSERT\(conflict) INTO \(table.name) (\(cols)) VALUES (\(vals))"
+        }
+
         var bindings = ctx.bindings
         for pb in params { bindings[pb.name] = pb.value }
         return BuiltQuery(sql: sql, bindings: bindings)

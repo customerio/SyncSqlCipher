@@ -681,6 +681,59 @@ struct InsertTests {
             .build()
         #expect(q.sql.hasPrefix("INSERT OR REPLACE INTO items"))
     }
+
+    @Test("onConflict DO UPDATE generates upsert SQL")
+    func upsertSQL() {
+        let users = TableName("users")
+        let q = Insert(into: users)
+            .set(col("id"), to: 1)
+            .set(col("name"), to: "Alice")
+            .onConflict(col("id"), doUpdate: col("name"))
+            .build()
+        #expect(q.sql == "INSERT INTO users (id, name)\nVALUES (:_0, :_1)\nON CONFLICT(id) DO UPDATE SET name = excluded.name")
+        #expect((q.bindings["_0"] as? Int) == 1)
+        #expect((q.bindings["_1"] as? String) == "Alice")
+    }
+
+    @Test("onConflict DO UPDATE with named params — same SQL across calls")
+    func upsertNamedParams() {
+        let users = TableName("users")
+        let idParam   = Param<Int>("id")
+        let nameParam = Param<String>("name")
+
+        let upsert = Insert(into: users)
+            .set(col("id"),   to: idParam)
+            .set(col("name"), to: nameParam)
+            .onConflict(col("id"), doUpdate: col("name"))
+
+        let q1 = upsert.build(params: idParam.set(1), nameParam.set("Alice"))
+        let q2 = upsert.build(params: idParam.set(2), nameParam.set("Bob"))
+
+        #expect(q1.sql == q2.sql)
+        #expect(q1.sql == "INSERT INTO users (id, name)\nVALUES (:id, :name)\nON CONFLICT(id) DO UPDATE SET name = excluded.name")
+        #expect((q1.bindings["name"] as? String) == "Alice")
+        #expect((q2.bindings["name"] as? String) == "Bob")
+    }
+
+    @Test("onConflict DO UPDATE with multiple update columns")
+    func upsertMultipleColumns() {
+        let users = TableName("users")
+        let q = Insert(into: users)
+            .set(col("id"),    to: 1)
+            .set(col("name"),  to: "Alice")
+            .set(col("email"), to: "a@b.com")
+            .onConflict(col("id"), doUpdate: col("name"), col("email"))
+            .build()
+        #expect(q.sql.contains("ON CONFLICT(id) DO UPDATE SET name = excluded.name, email = excluded.email"))
+    }
+
+    @Test("onConflict does not affect the INSERT OR <resolution> form")
+    func upsertDoesNotPollutePlainInsert() {
+        let t = TableName("items")
+        let plain = Insert(into: t, onConflict: .ignore).set(col("id"), to: 1).build()
+        #expect(plain.sql.hasPrefix("INSERT OR IGNORE INTO items"))
+        #expect(!plain.sql.contains("ON CONFLICT"))
+    }
 }
 
 // MARK: - Update rendering tests
@@ -737,6 +790,60 @@ struct UpdateTests {
             .set(col("score"), to: 10.0)
             .build()
         #expect(q.sql.contains("name = :_0, score = :_1"))
+    }
+}
+
+// MARK: - Delete rendering tests
+
+@Suite("Delete")
+struct DeleteTests {
+
+    @Test("literal equality generates correct SQL and binding")
+    func literalEquality() {
+        let users = TableName("users")
+        let q = Delete(from: users, where: col("id") == 42).build()
+        #expect(q.sql == "DELETE FROM users\nWHERE id = :_0")
+        #expect((q.bindings["_0"] as? Int) == 42)
+    }
+
+    @Test("named param stays constant across builds")
+    func namedParam() {
+        let users = TableName("users")
+        let idParam = Param<Int>("id")
+        let del = Delete(from: users, where: col("id") == idParam)
+
+        let q1 = del.build(params: idParam.set(1))
+        let q2 = del.build(params: idParam.set(2))
+
+        #expect(q1.sql == q2.sql)
+        #expect(q1.sql == "DELETE FROM users\nWHERE id = :id")
+        #expect((q1.bindings["id"] as? Int) == 1)
+        #expect((q2.bindings["id"] as? Int) == 2)
+    }
+
+    @Test("IN predicate generates placeholders for each value")
+    func inPredicate() {
+        let users = TableName("users")
+        let q = Delete(from: users, where: col("id").in(1, 2, 3)).build()
+        #expect(q.sql == "DELETE FROM users\nWHERE id IN (:_0, :_1, :_2)")
+        #expect(q.bindings.count == 3)
+    }
+
+    @Test("compound AND predicate")
+    func compoundAnd() {
+        let logs = TableName("logs")
+        let q = Delete(from: logs, where: col("level") == "debug" && col("archived") == true).build()
+        #expect(q.sql.contains("WHERE (level = :_0 AND archived = :_1)"))
+    }
+
+    @Test("same SQL for different literal values (cache key stability)")
+    func literalCacheKey() {
+        let users = TableName("users")
+        let q1 = Delete(from: users, where: col("id") == 1).build()
+        let q2 = Delete(from: users, where: col("id") == 2).build()
+        #expect(q1.sql == q2.sql)
+        #expect((q1.bindings["_0"] as? Int) == 1)
+        #expect((q2.bindings["_0"] as? Int) == 2)
     }
 }
 
@@ -923,6 +1030,88 @@ struct DDLDMLIntegrationTests {
             "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_users_email'",
             as: Int.self)
         #expect(idxGone == 0)
+    }
+
+    @Test("Insert onConflict DO UPDATE upserts rows correctly")
+    func upsertIntegration() throws {
+        let path = tempPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let db = try Database(path: path, key: "upsert-test")
+        let users = TableName("users")
+        try db.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, score REAL)")
+        try db.execute("INSERT INTO users VALUES (1, 'Alice', 9.0)")
+        try db.execute("INSERT INTO users VALUES (2, 'Bob',   7.5)")
+
+        let idParam    = Param<Int>("id")
+        let nameParam  = Param<String>("name")
+        let scoreParam = Param<Double>("score")
+
+        let upsert = Insert(into: users)
+            .set(col("id"),    to: idParam)
+            .set(col("name"),  to: nameParam)
+            .set(col("score"), to: scoreParam)
+            .onConflict(col("id"), doUpdate: col("name"), col("score"))
+
+        // Update existing row (id=1) and insert new row (id=3)
+        try db.execute(upsert, idParam.set(1), nameParam.set("Alice Updated"), scoreParam.set(9.5))
+        try db.execute(upsert, idParam.set(3), nameParam.set("Carol"),         scoreParam.set(8.0))
+
+        let rows = try db.query(Select(.all).from(users).orderBy(col("id")))
+        #expect(rows.count == 3)
+        #expect(rows[0]["name"] == .text("Alice Updated"))
+        #expect(rows[0]["score"] == .real(9.5))
+        #expect(rows[1]["name"] == .text("Bob"))     // unchanged
+        #expect(rows[2]["name"] == .text("Carol"))
+    }
+
+    @Test("Delete removes matching row and returns affected count")
+    func deleteLiteral() throws {
+        let path = tempPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let db = try Database(path: path, key: "del-test")
+        let items = TableName("items")
+        try db.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
+        try db.execute("INSERT INTO items VALUES (1, 'keep')")
+        try db.execute("INSERT INTO items VALUES (2, 'remove')")
+
+        let affected = try db.execute(Delete(from: items, where: col("id") == 2))
+        #expect(affected == 1)
+
+        let count = try db.scalarQuery("SELECT COUNT(*) FROM items", as: Int.self)
+        #expect(count == 1)
+        let remaining = try db.scalarQuery("SELECT name FROM items WHERE id = 1", as: String.self)
+        #expect(remaining == "keep")
+    }
+
+    @Test("Delete with named param reuses the same statement template")
+    func deleteNamedParam() throws {
+        let path = tempPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let db = try Database(path: path, key: "del-param-test")
+        let items = TableName("items")
+        try db.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
+        for i in 1...4 {
+            try db.execute("INSERT INTO items VALUES (?, ?)", i, "item\(i)")
+        }
+
+        let idParam = Param<Int>("id")
+        let del = Delete(from: items, where: col("id") == idParam)
+
+        try db.execute(del, idParam.set(1))
+        try db.execute(del, idParam.set(3))
+
+        let count = try db.scalarQuery("SELECT COUNT(*) FROM items", as: Int.self)
+        #expect(count == 2)
+
+        let ids = try db.query("SELECT id FROM items ORDER BY id")
+            .compactMap { row -> Int? in
+                if case .integer(let v) = row["id"] { return Int(v) }
+                return nil
+            }
+        #expect(ids == [2, 4])
     }
 
     @Test("unique index enforces uniqueness")

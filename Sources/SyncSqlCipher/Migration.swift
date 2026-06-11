@@ -90,6 +90,16 @@ public final class MigrationContext {
         try withConn { try $0.execute(update.build(params: params)) }
     }
 
+    // MARK: - Execute: Delete builder
+
+    /// Deletes rows matching the predicate using a ``Delete`` builder.
+    ///
+    /// - Returns: The number of rows affected by the statement.
+    @discardableResult
+    public func execute(_ delete: Delete, _ params: ParamBinding...) throws -> Int {
+        try withConn { try $0.execute(delete.build(params: params)) }
+    }
+
     // MARK: - Query helpers (useful for data migrations)
 
     /// Executes a raw SQL SELECT and returns all matching rows.

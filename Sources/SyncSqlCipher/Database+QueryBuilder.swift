@@ -104,6 +104,16 @@ extension Database {
         try withConnection { try $0.execute(update.build(params: params)) }
     }
 
+    // MARK: - Delete
+
+    /// Builds and executes a ``Delete`` with variadic ``ParamBinding`` values.
+    ///
+    /// - Returns: The number of rows affected by the statement.
+    @discardableResult
+    public func execute(_ delete: Delete, _ params: ParamBinding...) throws -> Int {
+        try withConnection { try $0.execute(delete.build(params: params)) }
+    }
+
     // MARK: - DDL
 
     /// Builds and executes a ``CreateTable`` statement.

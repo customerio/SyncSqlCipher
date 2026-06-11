@@ -152,8 +152,8 @@ extension Connection {
     /// - Returns: `true` if a row was deleted, `false` if no row matched.
     @discardableResult
     public func delete<T: Entity>(from type: T.Type = T.self, id: T.ID) throws -> Bool {
-        let sql = "DELETE FROM \"\(T.tableName.name)\" WHERE \"\(T.primaryKeyName)\" = ?"
-        return try execute(sql, bindings: [id as any SQLConvertible]) > 0
+        let pk = ColumnRef(T.primaryKeyName)
+        return try execute(Delete(from: T.tableName, where: pk == id).build()) > 0
     }
 
     /// Deletes all rows whose primary key is in `ids` from `T`'s table.
@@ -165,10 +165,8 @@ extension Connection {
     @discardableResult
     public func delete<T: Entity>(from type: T.Type = T.self, ids: [T.ID]) throws -> Int {
         guard !ids.isEmpty else { return 0 }
-        let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ", ")
-        let sql =
-            "DELETE FROM \"\(T.tableName.name)\" WHERE \"\(T.primaryKeyName)\" IN (\(placeholders))"
-        return try execute(sql, bindings: ids.map { $0 as any SQLConvertible })
+        let pk = ColumnRef(T.primaryKeyName)
+        return try execute(Delete(from: T.tableName, where: pk.in(ids)).build())
     }
 
     /// Deletes the row corresponding to `record` from its table.
@@ -229,27 +227,16 @@ extension Connection {
         pkName: String
     ) throws -> T {
         let updateCols = columns.filter { $0.key != pkName }
-        let colList = columns.map { "\"\($0.key)\"" }.joined(separator: ", ")
-        let placeholders = Array(repeating: "?", count: columns.count).joined(separator: ", ")
-        let bindings = columns.map { $0.value as any SQLConvertible }
-        let sql: String
-        if updateCols.isEmpty {
-            // Only a PK column — treat as idempotent insert.
-            sql =
-                "INSERT OR IGNORE INTO \"\(T.tableName.name)\" (\(colList)) VALUES (\(placeholders))"
-        } else {
-            let setClause =
-                updateCols
-                .map { "\"\($0.key)\" = excluded.\"\($0.key)\"" }
-                .joined(separator: ",\n    ")
-            sql = """
-                INSERT INTO "\(T.tableName.name)" (\(colList))
-                VALUES (\(placeholders))
-                ON CONFLICT("\(pkName)") DO UPDATE SET
-                    \(setClause)
-                """
+        var insert = columns.reduce(
+            Insert(into: T.tableName, onConflict: updateCols.isEmpty ? .ignore : nil)
+        ) { $0.set(ColumnRef($1.key), to: $1.value) }
+        if !updateCols.isEmpty {
+            insert = insert.onConflict(
+                ColumnRef(pkName),
+                doUpdate: updateCols.map { ColumnRef($0.key) }
+            )
         }
-        try execute(sql, bindings: bindings)
+        try execute(insert.build())
         return record
     }
 }
