@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'SyncSqlCipher'
-  s.version          = '1.0.0'
+  s.version          = '1.1.0'
   s.summary          = 'Synchronous, DispatchQueue-based SQLCipher wrapper for Swift.'
   s.homepage         = 'https://github.com/customerio/SyncSqlCipher'
   s.license          = { :type => 'MIT', :file => 'LICENSE' }
